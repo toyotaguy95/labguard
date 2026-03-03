@@ -1,0 +1,36 @@
+# ── Secrets & Config ──
+config.yaml
+config.yml
+.env
+.env.*
+*.key
+*.pem
+
+# ── Logs (contain real IPs and network data) ──
+*.log
+logs/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Claude Code ──
+.claude/

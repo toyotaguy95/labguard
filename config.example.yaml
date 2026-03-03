@@ -1,0 +1,59 @@
+# LabGuard Configuration
+# Copy this file to config.yaml and fill in your values:
+#   cp config.example.yaml config.yaml
+
+# ── Agent Settings ──
+agent:
+  interval: 300          # seconds between observe/think/act cycles (default: 5 min)
+  log_dir: /var/log/labguard   # where rsyslog writes forwarded logs
+
+# ── LLM Provider ──
+# LabGuard works with any OpenAI-compatible API.
+# Uncomment ONE provider block below.
+
+# Option 1: Ollama (free, local, no API key needed)
+llm:
+  provider: ollama
+  model: llama3.1:8b
+  base_url: http://localhost:11434/v1
+  api_key: ollama        # ollama doesn't need a real key but the field is required
+
+# Option 2: Anthropic (Claude)
+# llm:
+#   provider: anthropic
+#   model: claude-sonnet-4-20250514
+#   base_url: https://api.anthropic.com
+#   api_key: sk-ant-your-key-here
+
+# Option 3: OpenRouter (access to Claude, GPT, Llama, Mistral, etc.)
+# llm:
+#   provider: openrouter
+#   model: anthropic/claude-sonnet-4-20250514
+#   base_url: https://openrouter.ai/api/v1
+#   api_key: sk-or-your-key-here
+
+# Option 4: OpenAI
+# llm:
+#   provider: openai
+#   model: gpt-4o
+#   base_url: https://api.openai.com/v1
+#   api_key: sk-your-key-here
+
+# Option 5: OpenCode
+# llm:
+#   provider: opencode
+#   model: claude-sonnet-4-20250514
+#   base_url: https://api.opencode.ai/v1
+#   api_key: your-opencode-key-here
+
+# ── Alerts ──
+alerts:
+  telegram:
+    enabled: false
+    bot_token: "your-telegram-bot-token"
+    chat_id: "your-chat-id"
+
+  discord:
+    enabled: false
+    webhook_url: "your-discord-webhook-url"
+    # To get a webhook URL: Server Settings → Integrations → Webhooks → New Webhook
