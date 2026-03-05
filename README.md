@@ -1,3 +1,5 @@
+<img width="1027" height="1014" alt="Screenshot 2026-03-05 010621" src="https://github.com/user-attachments/assets/ad74137f-9ff9-4877-b60e-935419b6b1af" />
+
 # LabGuard
 
 AI-powered security monitoring agent for homelabs.
