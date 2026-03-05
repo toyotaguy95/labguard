@@ -282,11 +282,12 @@ def main():
     """CLI entry point."""
     config = load_config()
 
+    agent = LabGuardAgent(config)
+
     if "--test-alerts" in sys.argv:
         _test_alerts(config)
     elif "--once" in sys.argv:
-        agent = LabGuardAgent(config)
+        agent._print_startup()
         agent.run_once()
     else:
-        agent = LabGuardAgent(config)
         agent.run()
