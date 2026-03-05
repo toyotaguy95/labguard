@@ -103,7 +103,7 @@ class Actor:
                 result["errors"].append("Telegram send failed")
 
         if self.config.discord.enabled:
-            ok = self._send_discord(message)
+            ok = self._send_discord(message, analysis)
             result["discord"] = ok
             if not ok:
                 result["errors"].append("Discord send failed")
@@ -193,27 +193,64 @@ class Actor:
             print(f"[!] Telegram error: {e}")
             return False
 
-    def _send_discord(self, message: str) -> bool:
-        """Send alert via Discord webhook.
+    def _send_discord(self, message: str, analysis: Analysis | None = None) -> bool:
+        """Send alert via Discord webhook with rich embeds.
 
-        Discord webhooks are the simplest way to post to a channel —
-        just an HTTP POST to a URL. No bot token, no OAuth, no gateway
-        connection. Perfect for one-way alerts.
+        Uses Discord's embed format for a clean, colored alert card.
+        The sidebar color matches the severity level.
         """
         url = self.config.discord.webhook_url
 
-        payload = json.dumps({
-            "content": message,
-        }).encode("utf-8")
+        # Severity → Discord embed color (decimal RGB)
+        severity_colors = {
+            "critical": 15158332,   # red
+            "high":     15105570,   # orange
+            "medium":   16776960,   # yellow
+            "low":      3447003,    # blue
+            "info":     9807270,    # grey
+        }
+
+        if analysis and analysis.threats:
+            color = severity_colors.get(analysis.max_severity, 9807270)
+            fields = []
+            for t in analysis.threats:
+                if t.severity not in ALERT_THRESHOLD:
+                    continue
+                icon = SEVERITY_ICON.get(t.severity, "[?]")
+                value = t.description
+                if t.source_ip and t.source_ip != "unknown":
+                    value += f"\nSource: `{t.source_ip}`"
+                if t.recommendation:
+                    value += f"\nAction: {t.recommendation}"
+                fields.append({"name": icon, "value": value, "inline": False})
+
+            payload = json.dumps({
+                "embeds": [{
+                    "title": "LabGuard Alert",
+                    "description": analysis.summary,
+                    "color": color,
+                    "fields": fields[:10],  # Discord limit: 25, but keep it clean
+                    "footer": {"text": f"LabGuard v0.1.0 | {analysis.max_severity.upper()} severity"},
+                }],
+            }).encode("utf-8")
+        else:
+            payload = json.dumps({"content": message}).encode("utf-8")
 
         req = urllib.request.Request(
             url, data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "LabGuard/0.1.0",
+            },
         )
 
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status in (200, 204)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            print(f"[!] Discord error {e.code}: {body[:200]}")
+            return False
         except Exception as e:
             print(f"[!] Discord error: {e}")
             return False

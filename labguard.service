@@ -1,0 +1,24 @@
+[Unit]
+Description=LabGuard AI Security Agent
+After=network-online.target rsyslog.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=labguard
+Group=labguard
+WorkingDirectory=/home/labguard/labguard
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/labguard/labguard/venv/bin/python3 -m labguard
+Restart=on-failure
+RestartSec=30
+
+# Security hardening — limit what the service can do
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/labguard/labguard/labguard_findings.log
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

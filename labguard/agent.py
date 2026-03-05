@@ -41,14 +41,28 @@ from labguard.thinker import Thinker
 from labguard.actor import Actor
 
 
-BANNER = r"""
-    ██╗      █████╗ ██████╗  ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗
+
+
+# ANSI color codes for terminal output
+class _C:
+    """Terminal colors. Degrades gracefully if terminal doesn't support them."""
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    RED     = "\033[91m"
+    GREEN   = "\033[92m"
+    YELLOW  = "\033[93m"
+    CYAN    = "\033[96m"
+    RESET   = "\033[0m"
+
+
+BANNER = rf"""
+{_C.CYAN}{_C.BOLD}    ██╗      █████╗ ██████╗  ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗
     ██║     ██╔══██╗██╔══██╗██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗
     ██║     ███████║██████╔╝██║  ███╗██║   ██║███████║██████╔╝██║  ██║
     ██║     ██╔══██║██╔══██╗██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║
     ███████╗██║  ██║██████╔╝╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝
-    ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
-                    AI Security Agent for Homelabs
+    ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝{_C.RESET}
+{_C.DIM}                    AI Security Agent for Homelabs{_C.RESET}
 """
 
 
@@ -182,39 +196,97 @@ class LabGuardAgent:
 
     def _print_startup(self):
         """Print the startup banner with status info."""
-        print(BANNER)
-        version = "0.1.0"
-        print(f"                          v{version}")
-        print()
-        print(f"    [*] Observer:  watching {self.config.agent.log_dir}")
-        print(f"    [*] Thinker:   {self.config.llm.model} via {self.config.llm.provider}")
+        from labguard import __version__
+        from pathlib import Path
 
+        print(BANNER)
+        print(f"                          v{__version__}")
+        print()
+
+        G = _C.GREEN    # active/good
+        Y = _C.YELLOW   # warning
+        R = _C.RESET
+        B = _C.BOLD
+        D = _C.DIM
+
+        # Observer status
+        log_dir = Path(self.config.agent.log_dir)
+        log_count = len(list(log_dir.glob("*.log"))) if log_dir.exists() else 0
+        if log_count > 0:
+            print(f"    {G}●{R} {B}Observer{R}    {log_count} log sources in {self.config.agent.log_dir}")
+        else:
+            print(f"    {Y}○{R} {B}Observer{R}    no log files found in {self.config.agent.log_dir}")
+
+        # Thinker status
+        print(f"    {G}●{R} {B}Thinker{R}     {self.config.llm.model} {D}via {self.config.llm.provider}{R}")
+
+        # Sanitizer status
         san = self.config.sanitizer
         san_items = len(san.hostnames) + len(san.domains) + len(san.usernames)
         if san_items > 0:
-            print(f"    [*] Sanitizer: {san_items} custom rules + auto-scrub (IPs, MACs, emails)")
+            print(f"    {G}●{R} {B}Sanitizer{R}   {san_items} custom rules + auto-scrub")
         else:
-            print(f"    [*] Sanitizer: auto-scrub only (add hostnames/domains to config for full protection)")
+            print(f"    {Y}○{R} {B}Sanitizer{R}   auto-scrub only {D}(add hostnames/domains to config){R}")
 
+        # Actor status
         alert_channels = []
         if self.config.alerts.telegram.enabled:
             alert_channels.append("telegram")
         if self.config.alerts.discord.enabled:
             alert_channels.append("discord")
         if alert_channels:
-            print(f"    [*] Actor:     {', '.join(alert_channels)} alerts enabled")
+            print(f"    {G}●{R} {B}Actor{R}       {', '.join(alert_channels)} alerts enabled")
         else:
-            print(f"    [*] Actor:     local logging only (no alerts configured)")
+            print(f"    {Y}○{R} {B}Actor{R}       local logging only {D}(no alerts configured){R}")
+
+        # Memory status (Phase 2 placeholder)
+        print(f"    {D}○ Memory      not yet configured (Phase 2){R}")
+        print()
+
+
+def _test_alerts(config: Config):
+    """Send a test alert to all configured channels."""
+    from labguard.thinker import Analysis, Threat
+
+    print("[*] Sending test alert...")
+
+    test_analysis = Analysis(
+        summary="This is a test alert from LabGuard",
+        threats=[Threat(
+            severity="medium",
+            source_ip="203.0.113.1",
+            description="Test threat — if you see this, alerts are working!",
+            evidence="N/A — test alert",
+            recommendation="No action needed, this is a test",
+        )],
+    )
+
+    actor = Actor(config.alerts)
+    message = actor._format_alert(test_analysis)
+
+    sent = False
+    if config.alerts.telegram.enabled:
+        ok = actor._send_telegram(message)
+        print(f"  Telegram: {'sent' if ok else 'FAILED'}")
+        sent = True
+    if config.alerts.discord.enabled:
+        ok = actor._send_discord(message, test_analysis)
+        print(f"  Discord:  {'sent' if ok else 'FAILED'}")
+        sent = True
+
+    if not sent:
+        print("  No alert channels configured. Enable telegram or discord in config.yaml")
 
 
 def main():
     """CLI entry point."""
     config = load_config()
 
-    agent = LabGuardAgent(config)
-
-    # Check for --once flag
-    if "--once" in sys.argv:
+    if "--test-alerts" in sys.argv:
+        _test_alerts(config)
+    elif "--once" in sys.argv:
+        agent = LabGuardAgent(config)
         agent.run_once()
     else:
+        agent = LabGuardAgent(config)
         agent.run()
