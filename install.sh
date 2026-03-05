@@ -141,7 +141,7 @@ RestartSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$INSTALL_DIR/labguard_findings.log
+ReadWritePaths=$INSTALL_DIR/labguard_findings.log $INSTALL_DIR/labguard.db $INSTALL_DIR/labguard.db-journal
 PrivateTmp=true
 
 [Install]

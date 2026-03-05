@@ -147,18 +147,29 @@ class Thinker:
         else:
             self.endpoint = f"{base}/chat/completions"
 
-    def think(self, observation: Observation) -> Analysis:
+    def think(self, observation: Observation, memory_context: str = "") -> Analysis:
         """Analyze an observation. This is the core reasoning step.
 
         The observation gets formatted into a user message, combined with
         the system prompt, and sent to the LLM. The response is parsed
         from JSON into an Analysis object.
+
+        memory_context: Historical context from long-term memory. This is
+        the agent's WORKING MEMORY — relevant past observations loaded for
+        the current cycle. The LLM sees things like "this IP was seen 47
+        times last week" and factors that into its severity assessment.
         """
         if not observation.has_data:
             return Analysis(summary="No new log data to analyze")
 
         # Build the user message from observations
         user_message = self._format_observation(observation)
+
+        # Inject memory context if available — this goes BEFORE the logs
+        # so the LLM reads historical context first, then new data.
+        # Like briefing an analyst before handing them today's reports.
+        if memory_context:
+            user_message = memory_context + "\n\n" + user_message
 
         # Call the LLM
         raw_response = self._call_llm(user_message)

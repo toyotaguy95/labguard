@@ -39,6 +39,7 @@ from labguard.observer import Observer
 from labguard.sanitizer import Sanitizer, SanitizerConfig
 from labguard.thinker import Thinker
 from labguard.actor import Actor
+from labguard.memory import Memory
 
 
 
@@ -80,6 +81,7 @@ class LabGuardAgent:
         self.sanitizer = Sanitizer(config.sanitizer)
         self.thinker = Thinker(config.llm)
         self.actor = Actor(config.alerts)
+        self.memory = Memory()
         self.running = False
         self._cycle_count = 0
 
@@ -114,9 +116,19 @@ class LabGuardAgent:
             for warn in self.sanitizer.warnings:
                 print(f"  [!] {warn}")
 
+        # ── REMEMBER (before thinking) ──
+        # Pull historical context from memory to give the LLM awareness
+        # of past events. This is "working memory" — relevant history
+        # loaded into the current cycle's prompt.
+        history_context = self.memory.get_context_for_llm(
+            self._extract_ips(sanitized)
+        )
+        if history_context:
+            print(f"[cycle {self._cycle_count}] Memory loaded (historical context)")
+
         # ── THINK ──
         print(f"[cycle {self._cycle_count}] Thinking...")
-        analysis = self.thinker.think(sanitized)
+        analysis = self.thinker.think(sanitized, memory_context=history_context)
 
         if analysis.error:
             print(f"  [!] Thinker error: {analysis.error}")
@@ -125,9 +137,15 @@ class LabGuardAgent:
         print(f"  Summary: {analysis.summary}")
         print(f"  Threats: {len(analysis.threats)} found, max severity: {analysis.max_severity}")
 
+        # ── REMEMBER (after thinking) ──
+        # Store this cycle's findings in long-term memory
+        self.memory.record_analysis(analysis)
+        threat_24h = self.memory.get_threat_count(hours=24)
+        print(f"  Memory: {threat_24h} threats recorded in last 24h")
+
         # ── ACT ──
         print(f"[cycle {self._cycle_count}] Acting...")
-        actions = self.actor.act(analysis)
+        actions = self.actor.act(analysis, memory=self.memory)
 
         action_summary = []
         if actions["logged"]:
@@ -136,6 +154,8 @@ class LabGuardAgent:
             action_summary.append("telegram sent")
         if actions["discord"]:
             action_summary.append("discord sent")
+        if actions.get("suppressed", 0) > 0:
+            action_summary.append(f"{actions['suppressed']} alerts suppressed (dedup)")
         if actions["errors"]:
             for err in actions["errors"]:
                 action_summary.append(f"error: {err}")
@@ -153,6 +173,23 @@ class LabGuardAgent:
             "actions": actions,
             "elapsed": elapsed,
         }
+
+    def _extract_ips(self, observation) -> list[str]:
+        """Extract public IPs from observation data for memory lookup.
+
+        We only extract public IPs — internal ones are already sanitized
+        to [INTERNAL_N] placeholders and won't match anything in memory.
+        """
+        import re
+        ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+        ips = set()
+        for data in observation.sources.values():
+            for match in ip_pattern.findall(data):
+                # Skip private/loopback ranges and our placeholders
+                if not (match.startswith("10.") or match.startswith("192.168.")
+                        or match.startswith("172.") or match.startswith("127.")):
+                    ips.add(match)
+        return list(ips)
 
     def run(self):
         """Run the agent loop forever (until interrupted).
@@ -239,8 +276,13 @@ class LabGuardAgent:
         else:
             print(f"    {Y}○{R} {B}Actor{R}       local logging only {D}(no alerts configured){R}")
 
-        # Memory status (Phase 2 placeholder)
-        print(f"    {D}○ Memory      not yet configured (Phase 2){R}")
+        # Memory status
+        threat_count = self.memory.get_threat_count(hours=24)
+        top_offenders = self.memory.get_top_offenders(3)
+        if threat_count > 0:
+            print(f"    {G}●{R} {B}Memory{R}      {threat_count} threats in last 24h, {len(top_offenders)} tracked IPs")
+        else:
+            print(f"    {G}●{R} {B}Memory{R}      database ready (no history yet)")
         print()
 
 

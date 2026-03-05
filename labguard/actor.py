@@ -73,13 +73,26 @@ class Actor:
         self.config = config
         self.log_path = Path(log_file)
 
-    def act(self, analysis: Analysis) -> dict:
+    def act(self, analysis: Analysis, memory=None) -> dict:
         """Process an analysis and take appropriate actions.
+
+        memory: If provided, used for alert DEDUPLICATION. The agent checks
+        "did I already alert about this IP at this severity recently?" before
+        sending. Without memory, every cycle that finds the same scanner would
+        spam your phone. With memory, you get ONE alert and then silence until
+        the cooldown expires (default: 1 hour).
+
+        This is ACTION GATING — the agent doesn't just decide what to do,
+        it decides whether to do it at all based on past actions. Same concept
+        as LangChain's "should I use this tool?" but simpler.
 
         Returns a summary of what actions were taken, useful for the
         agent loop's own logging.
         """
-        result = {"logged": False, "telegram": False, "discord": False, "errors": []}
+        result = {
+            "logged": False, "telegram": False, "discord": False,
+            "errors": [], "suppressed": 0,
+        }
 
         # Always log findings locally, regardless of severity
         self._log_locally(analysis)
@@ -93,19 +106,58 @@ class Actor:
         if analysis.max_severity not in ALERT_THRESHOLD:
             return result
 
-        message = self._format_alert(analysis)
+        # ── DEDUPLICATION CHECK ──
+        # Filter threats to only those we haven't recently alerted about.
+        # This prevents the "buzzing phone at 3am" problem where the same
+        # port scanner triggers an alert every 5 minutes for hours.
+        alertable_threats = []
+        for threat in analysis.threats:
+            if threat.severity not in ALERT_THRESHOLD:
+                continue
+            if memory and not memory.should_alert(threat.source_ip, threat.severity):
+                result["suppressed"] += 1
+                # Record the suppression so we can track it
+                if self.config.telegram.enabled:
+                    memory.record_alert(threat.source_ip, threat.severity,
+                                        "telegram", suppressed=True)
+                if self.config.discord.enabled:
+                    memory.record_alert(threat.source_ip, threat.severity,
+                                        "discord", suppressed=True)
+                continue
+            alertable_threats.append(threat)
+
+        if not alertable_threats:
+            return result
+
+        # Build a filtered analysis with only the alertable threats
+        from labguard.thinker import Analysis as AnalysisClass
+        filtered = AnalysisClass(
+            summary=analysis.summary,
+            threats=alertable_threats,
+            total_events=analysis.total_events,
+            threats_found=len(alertable_threats),
+            top_talkers=analysis.top_talkers,
+        )
+
+        message = self._format_alert(filtered)
 
         # Fan-out: send to all enabled channels independently
         if self.config.telegram.enabled:
             ok = self._send_telegram(message)
             result["telegram"] = ok
-            if not ok:
+            if ok and memory:
+                for t in alertable_threats:
+                    memory.record_alert(t.source_ip, t.severity, "telegram")
+            elif not ok:
                 result["errors"].append("Telegram send failed")
 
         if self.config.discord.enabled:
-            ok = self._send_discord(message, analysis)
+            ok = self._send_discord(message, filtered)
             result["discord"] = ok
-            if not ok:
+            if ok and memory:
+                for t in alertable_threats:
+                    memory.record_alert(t.source_ip, t.severity, "discord")
+            elif not ok:
                 result["errors"].append("Discord send failed")
 
         return result
