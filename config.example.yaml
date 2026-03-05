@@ -57,3 +57,18 @@ alerts:
     enabled: false
     webhook_url: "your-discord-webhook-url"
     # To get a webhook URL: Server Settings → Integrations → Webhooks → New Webhook
+
+# ── Data Sanitizer ──
+# Scrubs sensitive data BEFORE logs are sent to the LLM.
+# Private IPs, MAC addresses, and emails are auto-scrubbed always.
+# Add YOUR hostnames, domains, and usernames below for full protection.
+sanitizer:
+  hostnames:
+    - "my-router"          # replace with your actual hostnames
+    - "my-server"
+  domains:
+    - "example.com"        # replace with your actual domain
+  usernames:
+    - "admin"             # replace with your actual usernames
+  # extra_patterns:       # optional: additional regex patterns to scrub
+  #   - "my-secret-project"

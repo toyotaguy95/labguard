@@ -1,1 +1,219 @@
-"""Actor module - sends alerts and takes defensive actions."""
+"""Actor module - sends alerts and takes defensive actions.
+
+Agent concept: ACTION / EXECUTION
+==================================
+The actor is the agent's interface to the outside world. It takes the
+thinker's analysis and DOES something with it — sends alerts, logs
+findings, and in later phases, takes defensive actions.
+
+Key design decisions:
+  1. PHASE 1 IS READ-ONLY (mostly). The actor can send notifications and
+     write logs. It CANNOT modify firewall rules, block IPs, or run
+     commands. This is deliberate. An agent that can take destructive
+     actions based on LLM output is dangerous — the LLM can hallucinate,
+     be prompt-injected, or just be wrong. We add destructive actions
+     in Phase 3 with human-in-the-loop approval.
+
+  2. SEVERITY THRESHOLD. Not every finding deserves a Telegram buzz at
+     3am. The actor filters by severity — only "medium" and above trigger
+     alerts by default. Info and low findings get logged silently.
+
+  3. MULTIPLE OUTPUT CHANNELS. Telegram, Discord, and local log file.
+     Each is independent — if Telegram is down, Discord still works.
+     This is the "fan-out" pattern. In agent frameworks, these would
+     be separate "tools" the agent can invoke.
+
+In framework terms:
+  - LangChain: these are "Tools" with side effects (send_message, etc.)
+  - CrewAI: this is the agent's "task output" being routed to destinations
+  - AutoGen: this is the "UserProxy" relaying results to the human
+
+Action space (Phase 1):
+  [x] Send Telegram message
+  [x] Send Discord webhook
+  [x] Write to local log file
+  [ ] Block IP (Phase 3)
+  [ ] Update firewall rule (Phase 3)
+  [ ] Run arbitrary command (Phase 3, with human approval)
+"""
+
+import json
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
+
+from labguard.config import AlertsConfig
+from labguard.thinker import Analysis
+
+
+# Minimum severity to trigger a push notification.
+# Anything below this gets logged locally but won't buzz your phone.
+ALERT_THRESHOLD = {"medium", "high", "critical"}
+
+# Severity → emoji for readable alerts
+SEVERITY_ICON = {
+    "critical": "[CRITICAL]",
+    "high":     "[HIGH]",
+    "medium":   "[MEDIUM]",
+    "low":      "[low]",
+    "info":     "[info]",
+}
+
+
+class Actor:
+    """Executes actions based on the thinker's analysis.
+
+    The actor's job is simple: take an Analysis, format it for humans,
+    and deliver it through the configured channels. It makes ONE decision:
+    is this severe enough to send a push alert, or just log it?
+    """
+
+    def __init__(self, config: AlertsConfig, log_file: str = "labguard_findings.log"):
+        self.config = config
+        self.log_path = Path(log_file)
+
+    def act(self, analysis: Analysis) -> dict:
+        """Process an analysis and take appropriate actions.
+
+        Returns a summary of what actions were taken, useful for the
+        agent loop's own logging.
+        """
+        result = {"logged": False, "telegram": False, "discord": False, "errors": []}
+
+        # Always log findings locally, regardless of severity
+        self._log_locally(analysis)
+        result["logged"] = True
+
+        # If there's nothing interesting, we're done
+        if not analysis.has_threats:
+            return result
+
+        # Only push-notify for medium severity and above
+        if analysis.max_severity not in ALERT_THRESHOLD:
+            return result
+
+        message = self._format_alert(analysis)
+
+        # Fan-out: send to all enabled channels independently
+        if self.config.telegram.enabled:
+            ok = self._send_telegram(message)
+            result["telegram"] = ok
+            if not ok:
+                result["errors"].append("Telegram send failed")
+
+        if self.config.discord.enabled:
+            ok = self._send_discord(message)
+            result["discord"] = ok
+            if not ok:
+                result["errors"].append("Discord send failed")
+
+        return result
+
+    def _format_alert(self, analysis: Analysis) -> str:
+        """Format an analysis into a human-readable alert message.
+
+        This is where "plain English alerts" happen. The LLM already
+        wrote descriptions in plain English — we just structure them
+        into a readable notification with severity icons and formatting.
+        """
+        lines = [f"LabGuard Alert — {analysis.summary}", ""]
+
+        for threat in analysis.threats:
+            if threat.severity not in ALERT_THRESHOLD:
+                continue
+            icon = SEVERITY_ICON.get(threat.severity, "[?]")
+            lines.append(f"{icon} {threat.description}")
+            if threat.source_ip and threat.source_ip != "unknown":
+                lines.append(f"  Source: {threat.source_ip}")
+            if threat.recommendation:
+                lines.append(f"  Action: {threat.recommendation}")
+            lines.append("")
+
+        if analysis.top_talkers:
+            lines.append(f"Top talkers: {', '.join(analysis.top_talkers)}")
+
+        return "\n".join(lines)
+
+    def _log_locally(self, analysis: Analysis):
+        """Append findings to a local log file.
+
+        Every analysis gets logged, not just alerts. This gives you a
+        complete history for pattern detection in Phase 2.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "timestamp": timestamp,
+            "summary": analysis.summary,
+            "max_severity": analysis.max_severity,
+            "threats_found": len(analysis.threats),
+            "threats": [
+                {
+                    "severity": t.severity,
+                    "source_ip": t.source_ip,
+                    "description": t.description,
+                }
+                for t in analysis.threats
+            ],
+        }
+
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError as e:
+            print(f"[!] Failed to write local log: {e}")
+
+    def _send_telegram(self, message: str) -> bool:
+        """Send alert via Telegram Bot API.
+
+        Telegram is ideal for security alerts because:
+        - Push notifications to your phone
+        - Works from anywhere (not tied to being at your desk)
+        - Free, no infrastructure needed
+        - Supports formatting (we keep it simple for now)
+        """
+        cfg = self.config.telegram
+        url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
+
+        payload = json.dumps({
+            "chat_id": cfg.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status == 200
+        except Exception as e:
+            print(f"[!] Telegram error: {e}")
+            return False
+
+    def _send_discord(self, message: str) -> bool:
+        """Send alert via Discord webhook.
+
+        Discord webhooks are the simplest way to post to a channel —
+        just an HTTP POST to a URL. No bot token, no OAuth, no gateway
+        connection. Perfect for one-way alerts.
+        """
+        url = self.config.discord.webhook_url
+
+        payload = json.dumps({
+            "content": message,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status in (200, 204)
+        except Exception as e:
+            print(f"[!] Discord error: {e}")
+            return False
