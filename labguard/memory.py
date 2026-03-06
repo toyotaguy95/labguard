@@ -278,6 +278,139 @@ class Memory:
 
         return "\n".join(parts) + "\n"
 
+    def detect_patterns(self, hours: int = 24) -> list[str]:
+        """Detect trends and patterns from historical data.
+
+        Agent concept: META-REASONING
+        ==============================
+        This is the agent reasoning about its OWN history, not raw logs.
+        A single cycle sees "5 SSH failures." Pattern detection sees
+        "SSH failures tripled compared to yesterday." The LLM gets both
+        perspectives, making its analysis much richer.
+
+        Each pattern is a plain-English string that gets injected into
+        the LLM prompt alongside working memory. The LLM can then say
+        things like "this is part of an escalating campaign" instead of
+        treating every cycle as isolated.
+
+        Returns a list of human-readable pattern descriptions.
+        """
+        patterns = []
+        now = time.time()
+
+        # ── 1. FREQUENCY ESCALATION ──
+        # Compare threat count in recent period vs previous period.
+        # If threats doubled, that's a pattern worth noting.
+        recent_cutoff = now - (hours * 3600)
+        previous_cutoff = now - (hours * 3600 * 2)
+
+        recent_count = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM threat_history WHERE timestamp > ?",
+            (recent_cutoff,),
+        ).fetchone()["cnt"]
+
+        previous_count = self._conn.execute(
+            """SELECT COUNT(*) as cnt FROM threat_history
+               WHERE timestamp > ? AND timestamp <= ?""",
+            (previous_cutoff, recent_cutoff),
+        ).fetchone()["cnt"]
+
+        if previous_count > 0 and recent_count > previous_count * 1.5:
+            ratio = recent_count / previous_count
+            patterns.append(
+                f"ESCALATION: Threat frequency increased {ratio:.1f}x "
+                f"({previous_count} -> {recent_count} in last {hours}h vs prior {hours}h)"
+            )
+        elif previous_count > 5 and recent_count < previous_count * 0.3:
+            patterns.append(
+                f"QUIET: Threat frequency dropped significantly "
+                f"({previous_count} -> {recent_count}). Could indicate attacker "
+                f"changed tactics or moved on."
+            )
+
+        # ── 2. NEW ATTACKERS ──
+        # IPs seen for the first time in the recent period.
+        new_ips = self._conn.execute(
+            """SELECT ip, max_severity, last_description
+               FROM ip_reputation
+               WHERE first_seen > ? AND total_sightings = 1
+               ORDER BY CASE max_severity
+                   WHEN 'critical' THEN 4 WHEN 'high' THEN 3
+                   WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC
+               LIMIT 5""",
+            (recent_cutoff,),
+        ).fetchall()
+
+        if len(new_ips) >= 3:
+            ips_str = ", ".join(r["ip"] for r in new_ips[:5])
+            patterns.append(
+                f"NEW ACTORS: {len(new_ips)} new attacker IPs appeared "
+                f"in last {hours}h: {ips_str}"
+            )
+
+        # ── 3. SEVERITY ESCALATION ──
+        # IPs whose max severity increased (started low, now high).
+        severity_order = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        escalators = self._conn.execute(
+            """SELECT ip, total_sightings, max_severity, last_description
+               FROM ip_reputation
+               WHERE total_sightings > 2 AND last_seen > ?
+               ORDER BY total_sightings DESC LIMIT 20""",
+            (recent_cutoff,),
+        ).fetchall()
+
+        for row in escalators:
+            # Check if earliest threats from this IP were lower severity
+            first_threat = self._conn.execute(
+                """SELECT severity FROM threat_history
+                   WHERE source_ip = ? ORDER BY timestamp ASC LIMIT 1""",
+                (row["ip"],),
+            ).fetchone()
+            if first_threat:
+                first_sev = severity_order.get(first_threat["severity"], 0)
+                current_sev = severity_order.get(row["max_severity"], 0)
+                if current_sev > first_sev and current_sev >= 2:  # medium+
+                    patterns.append(
+                        f"ESCALATION: {row['ip']} started at {first_threat['severity']} "
+                        f"and escalated to {row['max_severity']} "
+                        f"over {row['total_sightings']} sightings"
+                    )
+
+        # ── 4. PERSISTENT SCANNERS ──
+        # IPs that keep coming back cycle after cycle.
+        persistent = self._conn.execute(
+            """SELECT ip, total_sightings, max_severity,
+                      (last_seen - first_seen) / 86400.0 as days_active
+               FROM ip_reputation
+               WHERE total_sightings >= 5 AND last_seen > ?
+               ORDER BY total_sightings DESC LIMIT 5""",
+            (recent_cutoff,),
+        ).fetchall()
+
+        for row in persistent:
+            patterns.append(
+                f"PERSISTENT: {row['ip']} has been seen {row['total_sightings']} times "
+                f"over {row['days_active']:.1f} days (max severity: {row['max_severity']})"
+            )
+
+        # ── 5. SEVERITY DISTRIBUTION SHIFT ──
+        # If high/critical threats are a larger share than usual
+        if recent_count >= 5:
+            high_recent = self._conn.execute(
+                """SELECT COUNT(*) as cnt FROM threat_history
+                   WHERE timestamp > ? AND severity IN ('high', 'critical')""",
+                (recent_cutoff,),
+            ).fetchone()["cnt"]
+
+            high_ratio = high_recent / recent_count
+            if high_ratio > 0.5:
+                patterns.append(
+                    f"HIGH SEVERITY: {high_ratio:.0%} of recent threats are "
+                    f"high/critical ({high_recent}/{recent_count})"
+                )
+
+        return patterns
+
     def get_threat_count(self, hours: int = 24) -> int:
         """How many threats in the last N hours?"""
         cutoff = time.time() - (hours * 3600)

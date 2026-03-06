@@ -123,8 +123,18 @@ class LabGuardAgent:
         history_context = self.memory.get_context_for_llm(
             self._extract_ips(sanitized)
         )
+
+        # Pattern detection — meta-reasoning about trends
+        patterns = self.memory.detect_patterns(hours=24)
+        if patterns:
+            pattern_block = "\n=== Detected Patterns ===\n" + "\n".join(f"  {p}" for p in patterns) + "\n"
+            history_context = (history_context or "") + pattern_block
+            print(f"[cycle {self._cycle_count}] Patterns detected: {len(patterns)}")
+            for p in patterns:
+                print(f"  {_C.YELLOW}~{_C.RESET} {p}")
+
         if history_context:
-            print(f"[cycle {self._cycle_count}] Memory loaded (historical context)")
+            print(f"[cycle {self._cycle_count}] Memory context loaded for LLM")
 
         # ── THINK ──
         print(f"[cycle {self._cycle_count}] Thinking...")
@@ -280,7 +290,9 @@ class LabGuardAgent:
         threat_count = self.memory.get_threat_count(hours=24)
         top_offenders = self.memory.get_top_offenders(3)
         if threat_count > 0:
-            print(f"    {G}●{R} {B}Memory{R}      {threat_count} threats in last 24h, {len(top_offenders)} tracked IPs")
+            patterns = self.memory.detect_patterns(hours=24)
+            pattern_info = f", {len(patterns)} patterns" if patterns else ""
+            print(f"    {G}●{R} {B}Memory{R}      {threat_count} threats in last 24h, {len(top_offenders)} tracked IPs{pattern_info}")
         else:
             print(f"    {G}●{R} {B}Memory{R}      database ready (no history yet)")
         print()
