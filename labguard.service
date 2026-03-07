@@ -17,7 +17,7 @@ RestartSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/labguard/labguard/labguard_findings.log
+ReadWritePaths=/home/labguard/labguard
 PrivateTmp=true
 
 [Install]

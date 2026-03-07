@@ -40,6 +40,7 @@ from labguard.sanitizer import Sanitizer, SanitizerConfig
 from labguard.thinker import Thinker
 from labguard.actor import Actor
 from labguard.memory import Memory
+from labguard.health import HealthMonitor, CycleStats
 
 
 
@@ -82,6 +83,7 @@ class LabGuardAgent:
         self.thinker = Thinker(config.llm)
         self.actor = Actor(config.alerts)
         self.memory = Memory()
+        self.health = HealthMonitor(log_dir=config.agent.log_dir)
         self.running = False
         self._cycle_count = 0
 
@@ -105,6 +107,13 @@ class LabGuardAgent:
 
         if not observation.has_data:
             print("  Nothing new — skipping think/act")
+            self.health.record_cycle(CycleStats(
+                cycle_number=self._cycle_count,
+                duration=time.time() - cycle_start,
+                lines_observed=0, threats_found=0, llm_success=True,
+            ))
+            if self.health.should_heartbeat(self._cycle_count):
+                print(self.health.format_heartbeat())
             return {"cycle": self._cycle_count, "skipped": True}
 
         # ── SANITIZE ──
@@ -173,6 +182,21 @@ class LabGuardAgent:
         elapsed = time.time() - cycle_start
         print(f"  Actions: {', '.join(action_summary)}")
         print(f"  Cycle completed in {elapsed:.1f}s")
+
+        # ── RECORD HEALTH ──
+        self.health.record_cycle(CycleStats(
+            cycle_number=self._cycle_count,
+            duration=elapsed,
+            lines_observed=observation.total_lines,
+            threats_found=len(analysis.threats),
+            llm_success=analysis.error is None,
+            alerts_sent=int(actions.get("telegram", False)) + int(actions.get("discord", False)),
+            alerts_suppressed=actions.get("suppressed", 0),
+        ))
+
+        # Heartbeat — periodic self-check printed to console/journalctl
+        if self.health.should_heartbeat(self._cycle_count):
+            print(self.health.format_heartbeat())
 
         return {
             "cycle": self._cycle_count,
@@ -295,6 +319,13 @@ class LabGuardAgent:
             print(f"    {G}●{R} {B}Memory{R}      {threat_count} threats in last 24h, {len(top_offenders)} tracked IPs{pattern_info}")
         else:
             print(f"    {G}●{R} {B}Memory{R}      database ready (no history yet)")
+
+        # Health status
+        report = self.health.check_health()
+        if report.status == "healthy":
+            print(f"    {G}●{R} {B}Health{R}      self-monitoring active (heartbeat every {self.health.heartbeat_interval} cycles)")
+        else:
+            print(f"    {Y}○{R} {B}Health{R}      {report.status}: {'; '.join(report.issues[:2])}")
         print()
 
 
