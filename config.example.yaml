@@ -72,3 +72,17 @@ sanitizer:
     - "admin"             # replace with your actual usernames
   # extra_patterns:       # optional: additional regex patterns to scrub
   #   - "my-secret-project"
+
+# ── Severity Tuning ──
+# Reduce false positives and alert fatigue.
+# Cloudflare, Google, and common Suricata noise are filtered by default.
+tuning:
+  # Additional IP ranges to whitelist (CIDR notation).
+  # Built-in: Cloudflare, Google. Add your CDN, monitoring, etc.
+  whitelist_cidrs: []
+    # - "203.0.113.0/24"    # example: your hosting provider
+
+  # Additional noise patterns — log lines containing these are filtered
+  # before the LLM sees them. Built-in: Suricata performance messages.
+  noise_patterns: []
+    # - "health_check"      # example: your load balancer health probes

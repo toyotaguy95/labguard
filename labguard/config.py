@@ -66,6 +66,22 @@ class SanitizerConfig:
 
 
 @dataclass
+class TuningConfig:
+    """Severity tuning — reduce false positives and alert fatigue.
+
+    whitelist_cidrs: IP ranges that are known-good (Cloudflare, your CDN,
+        your own infrastructure). Log lines from these IPs get stripped
+        BEFORE the LLM sees them, so it can't over-classify them.
+
+    noise_patterns: Substrings in log lines that are known non-threats
+        (e.g., Suricata internal messages). Lines matching these get
+        filtered out before the LLM analyzes them.
+    """
+    whitelist_cidrs: list[str] = field(default_factory=list)
+    noise_patterns: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     """Complete LabGuard configuration.
 
@@ -80,6 +96,7 @@ class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     sanitizer: SanitizerConfig = field(default_factory=SanitizerConfig)
+    tuning: TuningConfig = field(default_factory=TuningConfig)
 
 
 def load_config(path: str = "config.yaml") -> Config:
@@ -111,6 +128,8 @@ def load_config(path: str = "config.yaml") -> Config:
     # can set LABGUARD_API_KEY in your shell profile and never put it in a file.
     sanitizer_raw = raw.get("sanitizer", {})
 
+    tuning_raw = raw.get("tuning", {})
+
     config = Config(
         agent=AgentConfig(
             interval=agent_raw.get("interval", 300),
@@ -138,6 +157,10 @@ def load_config(path: str = "config.yaml") -> Config:
             domains=sanitizer_raw.get("domains", []),
             usernames=sanitizer_raw.get("usernames", []),
             extra_patterns=sanitizer_raw.get("extra_patterns", []),
+        ),
+        tuning=TuningConfig(
+            whitelist_cidrs=tuning_raw.get("whitelist_cidrs", []),
+            noise_patterns=tuning_raw.get("noise_patterns", []),
         ),
     )
 

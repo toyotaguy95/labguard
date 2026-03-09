@@ -41,6 +41,7 @@ from labguard.thinker import Thinker
 from labguard.actor import Actor
 from labguard.memory import Memory
 from labguard.health import HealthMonitor, CycleStats
+from labguard.noise_filter import NoiseFilter
 
 
 
@@ -82,6 +83,7 @@ class LabGuardAgent:
         self.sanitizer = Sanitizer(config.sanitizer)
         self.thinker = Thinker(config.llm)
         self.actor = Actor(config.alerts)
+        self.noise_filter = NoiseFilter(config.tuning)
         self.memory = Memory()
         self.health = HealthMonitor(log_dir=config.agent.log_dir)
         self.running = False
@@ -124,6 +126,28 @@ class LabGuardAgent:
         if self.sanitizer.warnings:
             for warn in self.sanitizer.warnings:
                 print(f"  [!] {warn}")
+
+        # ── FILTER NOISE ──
+        # Strip known-good IPs and non-threat log lines BEFORE the LLM
+        # sees them. This prevents false positives like "Cloudflare IP is
+        # a critical attacker!" and saves tokens/time.
+        sanitized = self.noise_filter.filter(sanitized)
+        stats = self.noise_filter.stats
+        if stats["filtered_lines"] > 0:
+            print(f"[cycle {self._cycle_count}] Noise filter: removed {stats['filtered_lines']}/{stats['total_lines']} lines "
+                  f"(whitelist: {stats['whitelist_hits']}, noise: {stats['noise_hits']})")
+
+        # Check if there's anything left after filtering
+        if not sanitized.has_data:
+            print("  All lines were noise — skipping think/act")
+            self.health.record_cycle(CycleStats(
+                cycle_number=self._cycle_count,
+                duration=time.time() - cycle_start,
+                lines_observed=observation.total_lines, threats_found=0, llm_success=True,
+            ))
+            if self.health.should_heartbeat(self._cycle_count):
+                print(self.health.format_heartbeat())
+            return {"cycle": self._cycle_count, "skipped": True, "reason": "all_noise"}
 
         # ── REMEMBER (before thinking) ──
         # Pull historical context from memory to give the LLM awareness
@@ -298,6 +322,11 @@ class LabGuardAgent:
             print(f"    {G}●{R} {B}Sanitizer{R}   {san_items} custom rules + auto-scrub")
         else:
             print(f"    {Y}○{R} {B}Sanitizer{R}   auto-scrub only {D}(add hostnames/domains to config){R}")
+
+        # Noise filter status
+        n_cidrs = len(self.noise_filter._networks)
+        n_noise = len(self.noise_filter._noise_patterns)
+        print(f"    {G}●{R} {B}Filter{R}      {n_cidrs} whitelisted CIDRs, {n_noise} noise patterns")
 
         # Actor status
         alert_channels = []

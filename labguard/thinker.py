@@ -74,16 +74,52 @@ JSON in this exact format:
   }
 }
 
-Severity guide:
-- critical: Active exploitation, successful breach, data exfiltration
-- high: Brute force in progress, known exploit attempts, suspicious lateral movement
-- medium: Port scans, repeated failed logins, unusual traffic patterns
-- low: Informational alerts, routine scanning, known benign signatures
-- info: Normal traffic flagged by broad rules (e.g., DNS queries, TLS SNI logging)
+=== SEVERITY CALIBRATION (follow strictly) ===
 
-Focus on what a homelab owner NEEDS to know. Ignore routine noise like \
-Suricata INFO rules for common services (Discord, Google, Netflix, etc.). \
-Highlight anything that looks like a real attack or misconfiguration.\
+Ask yourself: "Would I wake a human at 3am for this?" If no, it is NOT \
+critical or high.
+
+- critical: CONFIRMED active breach — successful exploitation, shell access \
+  obtained, data actively being exfiltrated, ransomware executing. You must \
+  cite specific evidence of SUCCESS, not just an attempt.
+- high: Targeted attack with real chance of success — active brute force \
+  with valid usernames, exploit attempts against services you KNOW are \
+  running, credential stuffing with partial matches.
+- medium: Suspicious activity worth investigating — repeated probes from \
+  a single IP against real endpoints, failed SSH logins from unusual \
+  locations, access to sensitive paths that actually exist.
+- low: Background internet noise — port scans, vulnerability scanners \
+  (Shodan, Censys, ZoomEye), bots requesting /wp-login.php or /xmlrpc.php \
+  on non-WordPress servers, random GET requests returning 404.
+- info: Normal operations — health checks, CDN traffic, DNS queries, \
+  TLS handshakes, routine Suricata informational rules.
+
+=== COMMON FALSE POSITIVES (do NOT escalate these) ===
+
+1. Suricata "pkt seen on wrong thread" — This is a Suricata PERFORMANCE \
+   warning, not a security event. It means packets from the same flow were \
+   processed by different CPU threads. Always classify as info or ignore.
+2. Suricata "Applayer Mismatch" — Protocol detection issue, not an attack.
+3. Random scanners hitting 404 — Every public server gets bots requesting \
+   /wp-login.php, /.env, /config.json, etc. If the server returns 404 or \
+   403, the scan FAILED. This is low severity at most.
+4. SSH connection closed/reset — Automated scanners try SSH on every IP. \
+   A single failed attempt with no follow-up is low, not high.
+5. Known CDN/infrastructure IPs — Cloudflare (104.16.x.x, 172.64.x.x), \
+   Google (142.250.x.x), etc. These are NOT attackers.
+
+=== KEY RULES ===
+
+- A FAILED attack attempt is NOT critical. Only SUCCESSFUL exploitation is.
+- Seeing an IP many times does NOT make it critical. Persistent scanning \
+  is low severity. Persistence only escalates if the ATTACK is succeeding.
+- When in doubt, classify LOWER, not higher. Alert fatigue (too many false \
+  alarms) is more dangerous than missing one low-severity scan.
+- If you have zero real threats to report, return an empty threats array. \
+  Do NOT invent threats to fill the response.
+
+Focus on what a homelab owner NEEDS to know. Ignore routine noise. \
+Only escalate what genuinely requires human attention.\
 """
 
 
