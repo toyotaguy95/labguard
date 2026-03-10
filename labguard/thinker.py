@@ -64,7 +64,8 @@ JSON in this exact format:
       "source_ip": "1.2.3.4",
       "description": "Plain English explanation a non-technical person can understand",
       "evidence": "The specific log line(s) that triggered this finding",
-      "recommendation": "What the user should do about it"
+      "recommendation": "What the user should do about it",
+      "action": "block_ip 1.2.3.4"
     }
   ],
   "stats": {
@@ -122,6 +123,27 @@ Alert thresholds:
 - Normal values (cpu < 90%, mem < 85%, disk < 80%): do NOT report as threats.
 Set source_ip to "router" for infrastructure alerts.
 
+=== AVAILABLE ACTIONS ===
+
+You may suggest actions for threats rated medium or above. Set the "action" \
+field to one of these commands. For low/info threats, set action to null.
+
+Available tools:
+- block_ip <IP>         — Add IP to nftables blocklist (drops all traffic)
+- watch_ip <IP>         — Add IP to watchlist for closer monitoring
+- rate_limit_ip <IP>    — Apply rate limiting instead of full block
+- null                  — No action needed (use for low/info, or when unsure)
+
+Rules for suggesting actions:
+- ONLY suggest block_ip for high/critical threats with clear malicious intent.
+- Prefer rate_limit_ip over block_ip for medium threats (scanners, probes).
+- Use watch_ip when you want more data before deciding.
+- When in doubt, suggest watch_ip or null. Blocking a legitimate IP is worse \
+  than letting a scanner keep scanning.
+- NEVER suggest blocking CDN IPs, Google, or infrastructure IPs.
+- The human operator will review and approve every action. You are PROPOSING, \
+  not executing.
+
 === KEY RULES ===
 
 - A FAILED attack attempt is NOT critical. Only SUCCESSFUL exploitation is.
@@ -145,6 +167,7 @@ class Threat:
     description: str
     evidence: str
     recommendation: str
+    action: str | None = None  # Proposed tool use: "block_ip 1.2.3.4", etc.
 
 
 @dataclass
@@ -330,6 +353,7 @@ class Thinker:
                 description=threat_data.get("description", ""),
                 evidence=threat_data.get("evidence", ""),
                 recommendation=threat_data.get("recommendation", ""),
+                action=threat_data.get("action"),
             ))
 
         stats = data.get("stats", {})

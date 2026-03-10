@@ -42,6 +42,7 @@ from labguard.actor import Actor
 from labguard.memory import Memory
 from labguard.health import HealthMonitor, CycleStats
 from labguard.noise_filter import NoiseFilter
+from labguard.tools import parse_action, generate_command
 
 
 
@@ -185,6 +186,24 @@ class LabGuardAgent:
         self.memory.record_analysis(analysis)
         threat_24h = self.memory.get_threat_count(hours=24)
         print(f"  Memory: {threat_24h} threats recorded in last 24h")
+
+        # ── PROPOSE ACTIONS ──
+        # If the LLM suggested any actions, record them as proposals.
+        # These are NOT executed — they're stored for human review.
+        proposals = 0
+        for threat in analysis.threats:
+            parsed = parse_action(threat.action)
+            if parsed:
+                tool, target = parsed
+                cmd = generate_command(tool, target)
+                pid = self.memory.record_proposal(
+                    tool=tool, target=target, command=cmd,
+                    reason=threat.description, severity=threat.severity,
+                )
+                proposals += 1
+                print(f"  {_C.YELLOW}>{_C.RESET} Proposed: {tool} {target} (#{pid})")
+        if proposals:
+            print(f"  {proposals} action(s) proposed — awaiting human approval")
 
         # ── ACT ──
         print(f"[cycle {self._cycle_count}] Acting...")

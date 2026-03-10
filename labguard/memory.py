@@ -106,6 +106,17 @@ class Memory:
                 suppressed INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS action_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                tool TEXT NOT NULL,
+                target TEXT NOT NULL,
+                command TEXT,
+                reason TEXT,
+                severity TEXT,
+                status TEXT DEFAULT 'pending'
+            );
+
             CREATE INDEX IF NOT EXISTS idx_threat_ts ON threat_history(timestamp);
             CREATE INDEX IF NOT EXISTS idx_threat_ip ON threat_history(source_ip);
             CREATE INDEX IF NOT EXISTS idx_alert_ts ON alert_log(timestamp);
@@ -419,6 +430,34 @@ class Memory:
             (cutoff,),
         ).fetchone()
         return row["cnt"]
+
+    def record_proposal(self, tool: str, target: str, command: str | None,
+                        reason: str, severity: str) -> int:
+        """Record a proposed action. Returns the proposal ID."""
+        cursor = self._conn.execute(
+            """INSERT INTO action_proposals
+               (timestamp, tool, target, command, reason, severity, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+            (time.time(), tool, target, command, reason, severity),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def get_pending_proposals(self) -> list[dict]:
+        """Get all pending action proposals."""
+        rows = self._conn.execute(
+            """SELECT * FROM action_proposals
+               WHERE status = 'pending' ORDER BY timestamp DESC""",
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_proposal(self, proposal_id: int, status: str):
+        """Update a proposal's status (approved, rejected, expired)."""
+        self._conn.execute(
+            "UPDATE action_proposals SET status = ? WHERE id = ?",
+            (status, proposal_id),
+        )
+        self._conn.commit()
 
     def close(self):
         """Close the database connection."""

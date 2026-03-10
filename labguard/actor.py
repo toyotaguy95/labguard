@@ -41,6 +41,8 @@ import json
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+
+from labguard.tools import parse_action, generate_command, format_proposal, TOOL_REGISTRY
 from pathlib import Path
 
 from labguard.config import AlertsConfig
@@ -274,6 +276,17 @@ class Actor:
                     value += f"\nSource: `{t.source_ip}`"
                 if t.recommendation:
                     value += f"\nAction: {t.recommendation}"
+
+                # Add proposed tool action if the LLM suggested one
+                parsed = parse_action(t.action)
+                if parsed:
+                    tool, target = parsed
+                    cmd = generate_command(tool, target)
+                    risk = TOOL_REGISTRY[tool]["risk"]
+                    value += f"\n\n**Proposed:** {TOOL_REGISTRY[tool]['description'].format(target=target)}"
+                    if cmd:
+                        value += f"\n```{cmd}```"
+
                 fields.append({"name": icon, "value": value, "inline": False})
 
             payload = json.dumps({
