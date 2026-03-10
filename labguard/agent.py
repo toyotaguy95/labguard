@@ -86,6 +86,18 @@ class LabGuardAgent:
         self.actor = Actor(config.alerts)
         self.noise_filter = NoiseFilter(config.tuning)
         self.memory = Memory()
+
+        # Escalation thinker — optional second LLM for serious threats
+        if config.escalation_llm.enabled and config.escalation_llm.api_key:
+            from labguard.config import LLMConfig
+            esc = config.escalation_llm
+            esc_llm_config = LLMConfig(
+                provider=esc.provider, model=esc.model,
+                base_url=esc.base_url, api_key=esc.api_key,
+            )
+            self.escalation_thinker = Thinker(esc_llm_config)
+        else:
+            self.escalation_thinker = None
         self.health = HealthMonitor(log_dir=config.agent.log_dir)
         self.running = False
         self._cycle_count = 0
@@ -181,6 +193,25 @@ class LabGuardAgent:
         print(f"  Summary: {analysis.summary}")
         print(f"  Threats: {len(analysis.threats)} found, max severity: {analysis.max_severity}")
 
+        # ── ESCALATE (tiered reasoning) ──
+        # If the primary (free) model found something serious AND we have
+        # an escalation model configured, send a COMPACT summary to the
+        # smarter model for a second opinion. We do NOT resend all the raw
+        # logs — that's expensive. Instead we send the free model's analysis
+        # plus the evidence it cited. This cuts token cost by ~90%.
+        esc = self.config.escalation_llm
+        if (esc.enabled and self.escalation_thinker
+                and analysis.max_severity in esc.escalate_on):
+            print(f"[cycle {self._cycle_count}] {_C.YELLOW}Escalating{_C.RESET} to {esc.model} for second opinion...")
+            compact = self._build_escalation_context(analysis, history_context)
+            escalated = self.escalation_thinker.think(compact, memory_context="")
+            if not escalated.error:
+                analysis = escalated
+                print(f"  Escalated: {analysis.summary}")
+                print(f"  Threats: {len(analysis.threats)} found, max severity: {analysis.max_severity}")
+            else:
+                print(f"  [!] Escalation failed: {escalated.error} — using primary analysis")
+
         # ── REMEMBER (after thinking) ──
         # Store this cycle's findings in long-term memory
         self.memory.record_analysis(analysis)
@@ -250,6 +281,48 @@ class LabGuardAgent:
             "actions": actions,
             "elapsed": elapsed,
         }
+
+    def _build_escalation_context(self, analysis, history_context: str):
+        """Build a compact observation for the escalation model.
+
+        Instead of sending 1000+ raw log lines (expensive), we send:
+          - The primary model's analysis summary
+          - Evidence cited for each threat
+          - Historical context from memory
+
+        This cuts input tokens by ~90% while giving the escalation model
+        enough context to validate or override the primary analysis.
+        """
+        from labguard.observer import Observation
+        import time
+
+        parts = ["=== ESCALATION REVIEW ==="]
+        parts.append("A primary model analyzed the logs and found the following.")
+        parts.append("Review its findings and provide your own assessment.")
+        parts.append("You may adjust severity, add threats it missed, or remove false positives.")
+        parts.append("")
+        parts.append(f"Primary summary: {analysis.summary}")
+        parts.append(f"Threats found: {len(analysis.threats)}")
+        parts.append("")
+
+        for i, t in enumerate(analysis.threats, 1):
+            parts.append(f"--- Threat {i} ---")
+            parts.append(f"Severity: {t.severity}")
+            parts.append(f"Source IP: {t.source_ip}")
+            parts.append(f"Description: {t.description}")
+            parts.append(f"Evidence: {t.evidence}")
+            parts.append(f"Recommendation: {t.recommendation}")
+            if t.action:
+                parts.append(f"Proposed action: {t.action}")
+            parts.append("")
+
+        if history_context:
+            parts.append(history_context)
+
+        compact = Observation(timestamp=time.time())
+        compact.sources = {"escalation_review": "\n".join(parts)}
+        compact.line_counts = {"escalation_review": len(parts)}
+        return compact
 
     def _extract_ips(self, observation) -> list[str]:
         """Extract public IPs from observation data for memory lookup.
@@ -333,6 +406,11 @@ class LabGuardAgent:
 
         # Thinker status
         print(f"    {G}●{R} {B}Thinker{R}     {self.config.llm.model} {D}via {self.config.llm.provider}{R}")
+        if self.escalation_thinker:
+            esc = self.config.escalation_llm
+            print(f"    {G}●{R} {B}Escalation{R}  {esc.model} {D}(on {', '.join(esc.escalate_on)}){R}")
+        else:
+            print(f"    {D}    Escalation  disabled {D}(add escalation_llm to config){R}")
 
         # Sanitizer status
         san = self.config.sanitizer

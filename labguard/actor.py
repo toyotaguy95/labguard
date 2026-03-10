@@ -286,6 +286,8 @@ class Actor:
                     value += f"\n\n**Proposed:** {TOOL_REGISTRY[tool]['description'].format(target=target)}"
                     if cmd:
                         value += f"\n```{cmd}```"
+                    else:
+                        value += "\n*No command needed — LabGuard handles this automatically.*"
 
                 fields.append({"name": icon, "value": value, "inline": False})
 
@@ -295,7 +297,7 @@ class Actor:
                     "description": analysis.summary,
                     "color": color,
                     "fields": fields[:10],  # Discord limit: 25, but keep it clean
-                    "footer": {"text": f"LabGuard v0.1.0 | {analysis.max_severity.upper()} severity"},
+                    "footer": {"text": f"LabGuard v0.3.0 | {analysis.max_severity.upper()} severity"},
                 }],
             }).encode("utf-8")
         else:
@@ -305,7 +307,7 @@ class Actor:
             url, data=payload,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "LabGuard/0.1.0",
+                "User-Agent": "LabGuard/0.3.0",
             },
         )
 

@@ -28,6 +28,27 @@ class LLMConfig:
 
 
 @dataclass
+class EscalationLLMConfig:
+    """Optional second LLM for high-severity re-analysis.
+
+    Agent concept: TIERED REASONING
+    ================================
+    Not every task needs the same brain. Background noise? Use the free
+    model. Possible real attack? Escalate to a smarter (paid) model for
+    a second opinion. This saves money while maintaining accuracy.
+
+    Same pattern as a hospital triage: nurse checks vitals (free model),
+    doctor only sees you if something's wrong (paid model).
+    """
+    enabled: bool = False
+    provider: str = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
+    base_url: str = "https://api.anthropic.com"
+    api_key: str = ""
+    escalate_on: list[str] = field(default_factory=lambda: ["medium", "high", "critical"])
+
+
+@dataclass
 class TelegramConfig:
     """Telegram alert settings."""
     enabled: bool = False
@@ -94,6 +115,7 @@ class Config:
     """
     agent: AgentConfig = field(default_factory=AgentConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    escalation_llm: EscalationLLMConfig = field(default_factory=EscalationLLMConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     sanitizer: SanitizerConfig = field(default_factory=SanitizerConfig)
     tuning: TuningConfig = field(default_factory=TuningConfig)
@@ -128,6 +150,7 @@ def load_config(path: str = "config.yaml") -> Config:
     # can set LABGUARD_API_KEY in your shell profile and never put it in a file.
     sanitizer_raw = raw.get("sanitizer", {})
 
+    escalation_raw = raw.get("escalation_llm", {})
     tuning_raw = raw.get("tuning", {})
 
     config = Config(
@@ -151,6 +174,14 @@ def load_config(path: str = "config.yaml") -> Config:
                 enabled=discord_raw.get("enabled", False),
                 webhook_url=os.environ.get("LABGUARD_DISCORD_WEBHOOK", discord_raw.get("webhook_url", "")),
             ),
+        ),
+        escalation_llm=EscalationLLMConfig(
+            enabled=escalation_raw.get("enabled", False),
+            provider=escalation_raw.get("provider", "anthropic"),
+            model=escalation_raw.get("model", "claude-haiku-4-5-20251001"),
+            base_url=escalation_raw.get("base_url", "https://api.anthropic.com"),
+            api_key=os.environ.get("LABGUARD_ESCALATION_KEY", escalation_raw.get("api_key", "")),
+            escalate_on=escalation_raw.get("escalate_on", ["medium", "high", "critical"]),
         ),
         sanitizer=SanitizerConfig(
             hostnames=sanitizer_raw.get("hostnames", []),

@@ -212,13 +212,19 @@ class Thinker:
 
     def __init__(self, config: LLMConfig):
         self.config = config
-        # Build the API endpoint URL
-        # OpenAI-compatible APIs all use /v1/chat/completions
+
+        # Detect API format based on provider/base_url
+        # Anthropic uses a different format than OpenAI-compatible APIs
         base = config.base_url.rstrip("/")
-        if not base.endswith("/v1"):
-            self.endpoint = f"{base}/v1/chat/completions"
+        if config.provider == "anthropic" or "anthropic.com" in base:
+            self._api_format = "anthropic"
+            self.endpoint = f"{base}/v1/messages" if not base.endswith("/v1") else f"{base}/messages"
         else:
-            self.endpoint = f"{base}/chat/completions"
+            self._api_format = "openai"
+            if not base.endswith("/v1"):
+                self.endpoint = f"{base}/v1/chat/completions"
+            else:
+                self.endpoint = f"{base}/chat/completions"
 
     def think(self, observation: Observation, memory_context: str = "") -> Analysis:
         """Analyze an observation. This is the core reasoning step.
@@ -272,24 +278,42 @@ class Thinker:
     def _call_llm(self, user_message: str) -> str | None:
         """Make the actual HTTP call to the LLM API.
 
-        This uses the OpenAI-compatible chat completions format, which
-        every major provider supports. The request is simple:
-          - system message: who you are and how to respond
-          - user message: the log data to analyze
-        """
-        payload = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": 0.2,  # Low temperature = more consistent, factual output
-        }
+        Supports two formats:
+          - OpenAI-compatible (OpenRouter, Ollama, OpenAI)
+          - Anthropic Messages API (direct Anthropic)
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config.api_key}",
-        }
+        The Anthropic API is different: system prompt goes in a top-level
+        "system" field, not as a message. Auth uses x-api-key header
+        instead of Bearer token. Response structure is different too.
+        """
+        if self._api_format == "anthropic":
+            payload = {
+                "model": self.config.model,
+                "max_tokens": 2048,
+                "system": SYSTEM_PROMPT,
+                "messages": [
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": 0.2,
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.config.api_key,
+                "anthropic-version": "2023-06-01",
+            }
+        else:
+            payload = {
+                "model": self.config.model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": 0.2,
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config.api_key}",
+            }
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(self.endpoint, data=data, headers=headers)
@@ -297,7 +321,10 @@ class Thinker:
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"]
+                if self._api_format == "anthropic":
+                    return result["content"][0]["text"]
+                else:
+                    return result["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             print(f"[!] LLM API error {e.code}: {body[:200]}")
