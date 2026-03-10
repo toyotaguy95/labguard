@@ -108,6 +108,20 @@ critical or high.
 5. Known CDN/infrastructure IPs — Cloudflare (104.16.x.x, 172.64.x.x), \
    Google (142.250.x.x), etc. These are NOT attackers.
 
+=== INFRASTRUCTURE METRICS ===
+
+You may see lines tagged "labguard-metrics" containing router health data:
+  METRICS cpu=X mem=X disk=X net_rx=X net_tx=X
+
+These are the router's vital signs. This router handles IDS, reverse proxy, \
+and routing across multiple VLANs — high CPU during heavy traffic is normal. \
+Alert thresholds:
+- cpu > 95%: medium (only if sustained, not a brief spike).
+- mem > 90%: medium. mem > 97%: high.
+- disk > 85%: medium. disk > 95%: high.
+- Normal values (cpu < 90%, mem < 85%, disk < 80%): do NOT report as threats.
+Set source_ip to "router" for infrastructure alerts.
+
 === KEY RULES ===
 
 - A FAILED attack attempt is NOT critical. Only SUCCESSFUL exploitation is.
