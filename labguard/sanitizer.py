@@ -84,7 +84,7 @@ class SanitizerConfig:
     """
     # Hostnames to redact (e.g., ["lab-router", "nas01", "plex-server"])
     hostnames: list[str] = field(default_factory=list)
-    # Domains to redact (e.g., ["trippylab.xyz", "mydomain.com"])
+    # Domains to redact (e.g., ["example.com", "mydomain.com"])
     domains: list[str] = field(default_factory=list)
     # Usernames to redact (e.g., ["admin", "labguard"])
     usernames: list[str] = field(default_factory=list)

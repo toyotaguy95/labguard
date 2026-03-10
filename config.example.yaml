@@ -46,6 +46,19 @@ llm:
 #   base_url: https://api.opencode.ai/v1
 #   api_key: your-opencode-key-here
 
+# ── Escalation LLM (optional) ──
+# Use a smarter (paid) model for second opinions on real threats.
+# The primary model handles routine cycles for free. When it finds
+# medium+ severity, the escalation model re-analyzes for accuracy.
+# This saves ~90% on API costs vs using the paid model for everything.
+# escalation_llm:
+#   enabled: true
+#   provider: anthropic
+#   model: claude-haiku-4-5-20251001
+#   base_url: https://api.anthropic.com
+#   api_key: ""              # or set LABGUARD_ESCALATION_KEY env var
+#   escalate_on: ["medium", "high", "critical"]
+
 # ── Alerts ──
 alerts:
   telegram:
